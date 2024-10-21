@@ -1,17 +1,16 @@
 use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, sync::mpsc::{sync_channel, Receiver, SyncSender}, thread::{self, sleep}, time::Duration};
 
-use button_mapping::button_hash;
-use key_mapping::key_hash;
-use rdev::{grab, Button, Event, GrabError, Key};
+use key::Key;
+use rdev::{grab, Event, GrabError};
 use serde::Deserialize;
+use toml::{map::Map, Table, Value};
 
-mod key_mapping;
-mod button_mapping;
+mod key;
 
 #[derive(Debug)]
 struct ConfigState {
     // using this because
-    binds: HashMap<BTreeSet<u32>, Action>
+    binds: HashMap<BTreeSet<Key>, Action>
 }
 
 impl ConfigState {
@@ -32,10 +31,82 @@ impl ConfigState {
             }
         };
 
-        // parse that shit
+        //parse that shit
+        let parsed_config = match content.parse::<Table>() {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("error parsing config: {}", error);
+                return ConfigState::new();
+            }
+        };
+
+        // check if [binds] was defined in the config
+        let binds_content = match parsed_config.get("binds") {
+            Some(binds_content) => binds_content,
+            None => {
+                eprintln!("error parsing config: [binds] does not exist in config file");
+                // maybe not exit here? maybe its better to just assume no binds were set instead
+                // of failing with an error.
+                return ConfigState::new();
+            }
+        };
+
+        // check that [binds] is a table
+        let binds_table = match binds_content {
+            toml::Value::Table(table) => table,
+            _ => {
+                eprintln!("error parsing config: [binds] exists but it is not a table");
+                return ConfigState::new();
+            }
+        };
+
+        let mut binds = HashMap::new();
+
+        // parse all the binds
+        for (key, value) in binds_table.clone() {
+
+            // some sweet sweet functional chaining
+            let keys: BTreeSet<Key> = key
+                .split(" + ")
+                .filter_map(|key| {
+                    let key_result = Key::from_config_kebab(key);
+                    if key_result.is_none() {
+                        eprintln!("error parsing config: {} is not a valid key", key);
+                        // maybe fail here?
+                    }
+                    key_result
+                })
+                .collect();
+
+            if keys.len() == 0 {
+                eprintln!("error parsing config: no keys in bind");
+                return ConfigState::new();
+            }
+
+            // check that the value is a table
+            let value_table = match value {
+                toml::Value::Table(value_table) => value_table,
+                _ => {
+                    eprintln!("error parsing config: value is not a table");
+                    return ConfigState::new();
+                }
+            };
+
+            let action = match Action::new_from_config_map(&value_table) {
+                Some(action) => action,
+                None => {
+                    eprintln!("error parsing config: invalid action");
+                    return ConfigState::new();
+                }
+            };
+
+            /* 
+            */
+            binds.insert(keys, action);
+        }
 
         return ConfigState {
-            binds: HashMap::new()
+            binds
         }
     }
 }
@@ -83,6 +154,42 @@ enum Action {
     MouseModifier { x_mul: f64, y_mul: f64 }
 }
 
+impl Action {
+    fn new_from_config_map(config_map: &Map<String, Value>) -> Option<Self> {
+        let type_val = match config_map.get("type") {
+            Some(t) => t,
+            None => {
+                eprintln!("error parsing config: action does not have a property `type`");
+                return None;
+            }
+        };
+
+        let type_str = match type_val {
+            Value::String(s) => s,
+            _ => return None
+        };
+
+        let action = match type_str.as_str() {
+            "cmd" => {
+                let command_val = match config_map.get("command") {
+                    Some(cmd) => cmd,
+                    None => return None
+                };
+
+                let command_str = match command_val {
+                    Value::String(s) => s,
+                    _ => return None
+                };
+
+                Action::Cmd { command: command_str.to_string() }
+            },
+            _ => return None
+        };
+
+        Some(action)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MousePosition {
     x: f64,
@@ -97,8 +204,7 @@ struct WheelScroll {
 
 #[derive(Debug, Clone)]
 struct KeyState {
-    keys_down: BTreeSet<u32>,
-    buttons_down: BTreeSet<u32>,
+    keys_down: BTreeSet<Key>,
     last_mouse_position: Option<MousePosition>,
     scrolling_speed: WheelScroll
 }
@@ -111,36 +217,25 @@ impl KeyState {
         // if possible we should capture the current state and init with that.
         return KeyState {
             keys_down: BTreeSet::new(),
-            buttons_down: BTreeSet::new(),
             last_mouse_position: None,
             scrolling_speed: WheelScroll { delta_x: 0, delta_y: 0 }
         }
     }
 
-    fn key_down(&mut self, key: Key) -> bool {
-        self.keys_down.insert(key_hash(key))
+    fn key_down(&mut self, key: Key) {
+        self.keys_down.insert(key);
     }
 
-    fn key_up(&mut self, key: Key) -> bool {
-        self.keys_down.remove(&key_hash(key))
+    fn key_up(&mut self, key: Key) {
+        self.keys_down.remove(&key);
     }
 
-    fn scroll_speed(&mut self, delta_x: i64, delta_y: i64) -> bool {
+    fn scroll_speed(&mut self, delta_x: i64, delta_y: i64) {
         self.scrolling_speed = WheelScroll { delta_x, delta_y };
-        true
     }
 
-    fn mouse_position(&mut self, x: f64, y: f64) -> bool {
+    fn mouse_position(&mut self, x: f64, y: f64) {
         self.last_mouse_position = Some(MousePosition { x, y });
-        true
-    }
-
-    fn button_down(&mut self, button: Button) -> bool {
-        self.buttons_down.insert(button_hash(button))
-    }
-
-    fn button_up(&mut self, button: Button) -> bool {
-        self.buttons_down.remove(&button_hash(button))
     }
 }
 
@@ -225,10 +320,10 @@ impl KeyListener {
                         KeyListenerEvent::Event(event) => {
                             match event.event_type {
                                 rdev::EventType::KeyPress(key) => {
-                                    self.state.key_down(key);
+                                    self.state.key_down(Key::new_from_rdev_key(key));
                                 },
                                 rdev::EventType::KeyRelease(key) => {
-                                    self.state.key_up(key);
+                                    self.state.key_up(Key::new_from_rdev_key(key));
                                 },
                                 rdev::EventType::Wheel { delta_x, delta_y } => {
                                     self.state.scroll_speed(delta_x, delta_y);
@@ -237,10 +332,10 @@ impl KeyListener {
                                     self.state.mouse_position(x, y);
                                 },
                                 rdev::EventType::ButtonPress(button) => {
-                                    self.state.button_down(button);
+                                    self.state.key_down(Key::new_from_rdev_button(button));
                                 },
                                 rdev::EventType::ButtonRelease(button) => {
-                                    self.state.button_up(button);
+                                    self.state.key_up(Key::new_from_rdev_button(button));
                                 },
                             }
                             let _ = result_sender.send(self.handle_event(event.clone()));
