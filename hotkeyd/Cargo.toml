@@ -1,0 +1,11 @@
+[package]
+name = "hotkeyd"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+linked_hash_set = "0.1.4"
+rdev = { version = "0.5.3", features = ["unstable_grab", "serialize"] }
+serde = "1.0.210"
+toml = "0.8.19"
+hotkeyd_derive = { path = "../hotkeyd_derive" }

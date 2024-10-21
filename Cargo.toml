@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+  "hotkeyd",
+  "hotkeyd_derive"
+]
