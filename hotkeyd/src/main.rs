@@ -100,8 +100,6 @@ impl ConfigState {
                 }
             };
 
-            /* 
-            */
             binds.insert(keys, action);
         }
 
@@ -146,10 +144,10 @@ impl Config {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 enum Action {
     Cmd { command: String },
-    Macro { r#macro: Vec<BTreeSet<u32>>},
+    Macro { r#macro: Vec<BTreeSet<Key>> },
     ScrollModifier { x_mul: i64, y_mul: i64 },
     MouseModifier { x_mul: f64, y_mul: f64 }
 }
@@ -183,6 +181,47 @@ impl Action {
 
                 Action::Cmd { command: command_str.to_string() }
             },
+            "macro" => {
+                let marco_val = match config_map.get("macro") {
+                    Some(mv) => mv,
+                    None => return None
+                };
+
+                let macro_vec = match marco_val {
+                    Value::Array(v) => v,
+                    _ => return None
+                };
+
+                let mut macro_keys = vec![];
+
+                for macro_val in macro_vec {
+                    let macro_str = match macro_val {
+                        Value::String(s) => s,
+                        _ => return None
+                    };
+
+                    let keys: BTreeSet<Key> = macro_str
+                        .split(" + ")
+                        .filter_map(|key| {
+                            let key_result = Key::from_config_kebab(key);
+                            if key_result.is_none() {
+                                eprintln!("error parsing config: {} is not a valid key", key);
+                                // maybe fail here?
+                            }
+                            key_result
+                        })
+                        .collect();
+
+                    if keys.len() == 0 {
+                        eprintln!("error parsing config: no keys in bind");
+                        return None;
+                    }
+
+                    macro_keys.push(keys);
+                }
+
+                Action::Macro { r#macro: macro_keys }
+            }
             _ => return None
         };
 
