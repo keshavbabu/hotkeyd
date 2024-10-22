@@ -1,6 +1,8 @@
-use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Mutex, RwLock}, thread::{self, sleep}, time::Duration};
+use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, os::unix::thread, path::Path, sync::{mpsc::{sync_channel, Receiver, SyncSender}, RwLock}, thread::sleep, time::Duration};
 
 use key::Key;
+use notify::FsEventWatcher;
+use notify_debouncer_mini::{new_debouncer, DebounceEventResult, DebouncedEvent, DebouncedEventKind, Debouncer};
 use rdev::{grab, Event, GrabError};
 use toml::{map::Map, Table, Value};
 
@@ -109,25 +111,85 @@ impl ConfigState {
 
 #[derive(Debug)]
 struct Config {
-    state: RwLock<ConfigState>
+    state: RwLock<ConfigState>,
+
+    file_watcher: Option<Debouncer<FsEventWatcher>>
 }
 
 impl Config {
     fn new() -> Self {
         // we are going to start a watcher here that basically just listens for changes to the
-        // config file
-        let config_state = match var("HOTKEYD_CONFIG") {
-            Ok(file_path) => {
+        // config file 
+
+        let config_file_path = match var("HOTKEYD_CONFIG") {
+            Ok(path) => Some(path),
+            Err(err) => {
+                eprintln!("error getting config path: {}, maybe HOTKEYD_CONFIG was not set?", err);
+                None
+            }
+        };
+
+        let watcher = match config_file_path.clone() {
+            Some(config_fp) => {
+                let w = new_debouncer(Duration::from_secs(1), |res: DebounceEventResult| {
+                    let event: DebouncedEvent = match res {
+                        Ok(e) => {
+                            if let Some(ev) = e.last() {
+                                ev.clone()
+                            } else {
+                                return
+                            }
+                        },
+                        Err(err) => {
+                            eprintln!("error watching file: {}", err);
+
+                            return
+                        }
+                    };
+
+                    match event.kind {
+                        DebouncedEventKind::Any => {
+                            println!("config file changed... reloading...");  
+                        },
+                        _ => {}
+                    }
+                });
+
+                match w {
+                    Ok(mut wat) => {
+                        let res = wat.watcher().watch(Path::new(&config_fp), notify::RecursiveMode::NonRecursive);
+
+                        match res {
+                            Ok(_) => Some(wat),
+                            Err(err) => {
+                                eprintln!("error starting watcher: {}", err);
+
+                                None
+                            }
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!("unable to start config file watcher: {}", error);
+
+                        None
+                    }
+                }
+            },
+            None => None
+        };
+
+        let config_state = match config_file_path {
+            Some(file_path) => {
                 ConfigState::new_from_file(file_path)
             },
-            Err(error) => {
-                eprintln!("Error: {}, maybe HOTKEYD_CONFIG was not set? using empty config.", error);
+            None => {
                 ConfigState::new()
             }
         };
 
         return Config { 
-            state: RwLock::new(config_state)
+            state: RwLock::new(config_state),
+            file_watcher: watcher
         }
     }
 
