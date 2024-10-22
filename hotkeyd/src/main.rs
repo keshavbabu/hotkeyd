@@ -1,4 +1,4 @@
-use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, os::unix::thread, path::Path, sync::{mpsc::{sync_channel, Receiver, SyncSender}, RwLock}, thread::sleep, time::Duration};
+use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, os::unix::thread, path::Path, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, RwLock}, thread::{sleep, spawn, JoinHandle}, time::Duration};
 
 use key::Key;
 use notify::FsEventWatcher;
@@ -110,10 +110,17 @@ impl ConfigState {
 }
 
 #[derive(Debug)]
-struct Config {
-    state: RwLock<ConfigState>,
+struct ConfigFileWatcher {
+    fs_watcher: Debouncer<FsEventWatcher>,
 
-    file_watcher: Option<Debouncer<FsEventWatcher>>
+    config_reloader_handler: JoinHandle<()>
+}
+
+#[derive(Debug)]
+struct Config {
+    state: Arc<RwLock<ConfigState>>,
+
+    config_file_watcher: Option<ConfigFileWatcher>
 }
 
 impl Config {
@@ -129,9 +136,12 @@ impl Config {
             }
         };
 
-        let watcher = match config_file_path.clone() {
+        let config_res = match config_file_path.clone() {
             Some(config_fp) => {
-                let w = new_debouncer(Duration::from_secs(1), |res: DebounceEventResult| {
+                // channel to notify to relaod the config
+                let (tx, rx) = sync_channel::<String>(0);
+                let cloned_config_fp = config_fp.clone();
+                let w = new_debouncer(Duration::from_secs(1), move |res: DebounceEventResult| {
                     let event: DebouncedEvent = match res {
                         Ok(e) => {
                             if let Some(ev) = e.last() {
@@ -149,7 +159,11 @@ impl Config {
 
                     match event.kind {
                         DebouncedEventKind::Any => {
-                            println!("config file changed... reloading...");  
+                            let send_result = tx.send(cloned_config_fp.clone());
+                            match send_result {
+                                Ok(_) => {},
+                                Err(err) => eprintln!("error sending notification to reload config: {}", err)
+                            }
                         },
                         _ => {}
                     }
@@ -160,7 +174,7 @@ impl Config {
                         let res = wat.watcher().watch(Path::new(&config_fp), notify::RecursiveMode::NonRecursive);
 
                         match res {
-                            Ok(_) => Some(wat),
+                            Ok(_) => Some((rx, wat)),
                             Err(err) => {
                                 eprintln!("error starting watcher: {}", err);
 
@@ -178,18 +192,49 @@ impl Config {
             None => None
         };
 
-        let config_state = match config_file_path {
+        let config_state_lock = match config_file_path.clone() {
             Some(file_path) => {
-                ConfigState::new_from_file(file_path)
+                Arc::new(RwLock::new(ConfigState::new_from_file(file_path)))
             },
             None => {
-                ConfigState::new()
+                Arc::new(RwLock::new(ConfigState::new()))
             }
         };
 
+        let config_file_watcher = match config_res {
+            Some((rx, watcher)) => {
+                let cs_l = Arc::clone(&config_state_lock);
+                let handler = spawn(move || {
+                    loop {
+                        match rx.recv() {
+                            Ok(config_fp) => {
+                                println!("reloading config... ");
+
+                                match cs_l.write() {
+                                    Ok(mut c) => {
+                                        *c = ConfigState::new_from_file(config_fp)
+                                    },
+                                    Err(err) => {
+                                        eprintln!("error config state lock: {}", err);
+                                    }
+                                }
+                            }
+                            Err(err) => eprintln!("error receiving config reload notification: {}", err)
+                        }
+                    }
+                });
+
+                Some(ConfigFileWatcher {
+                    fs_watcher: watcher,
+                    config_reloader_handler: handler
+                })
+            },
+            None => None
+        }; 
+
         return Config { 
-            state: RwLock::new(config_state),
-            file_watcher: watcher
+            state: config_state_lock,
+            config_file_watcher
         }
     }
 
@@ -402,7 +447,7 @@ impl KeyListener {
         let (event_sender, event_receiver): (SyncSender<KeyListenerEvent>, Receiver<KeyListenerEvent>) = sync_channel(0);
 
         let (result_sender, result_receiver): (SyncSender<Option<Event>>, Receiver<Option<Event>>) = sync_channel(0);
-        let handle = thread::spawn(move || {
+        let handle = spawn(move || {
             let sender = event_sender.clone();
             let res = grab(move |event: Event| -> Option<Event> { 
                 // handle extra shit here
