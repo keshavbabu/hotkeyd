@@ -1,15 +1,13 @@
-use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, sync::mpsc::{sync_channel, Receiver, SyncSender}, thread::{self, sleep}, time::Duration};
+use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Mutex, RwLock}, thread::{self, sleep}, time::Duration};
 
 use key::Key;
 use rdev::{grab, Event, GrabError};
-use serde::Deserialize;
 use toml::{map::Map, Table, Value};
 
 mod key;
 
 #[derive(Debug)]
 struct ConfigState {
-    // using this because
     binds: HashMap<BTreeSet<Key>, Action>
 }
 
@@ -111,7 +109,7 @@ impl ConfigState {
 
 #[derive(Debug)]
 struct Config {
-    state: ConfigState
+    state: RwLock<ConfigState>
 }
 
 impl Config {
@@ -129,14 +127,22 @@ impl Config {
         };
 
         return Config { 
-            state: config_state 
+            state: RwLock::new(config_state)
         }
     }
 
     fn action_for_state(&mut self, key_state: KeyState) -> Vec<Action> {
+        let state = match self.state.read() {
+            Ok(state) => state,
+            Err(err) => {
+                eprintln!("error getting lock for config state: {}", err);
+
+                return vec![];
+            }
+        };
         let mut actions: Vec<Action> = vec![];
         // check key_binds
-        if let Some(action) = self.state.binds.get(&key_state.keys_down) { 
+        if let Some(action) = state.binds.get(&key_state.keys_down) { 
             actions.push(action.clone());
         }
 

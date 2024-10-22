@@ -9,3 +9,5 @@ rdev = { version = "0.5.3", features = ["unstable_grab", "serialize"] }
 serde = "1.0.210"
 toml = "0.8.19"
 hotkeyd_derive = { path = "../hotkeyd_derive" }
+notify = "6.1.1"
+notify-debouncer-mini = "0.4.1"
