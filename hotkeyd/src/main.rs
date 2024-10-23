@@ -281,8 +281,28 @@ impl Action {
 
                 command_split.drain(0..1);
 
+                let mut envs = HashMap::new();
+
+                // we want to set the USER env var to the currently logged in user
+                match Command::new("/usr/bin/stat").args(["-f", "\"%Su\"", "/dev/console"]).output() {
+                    Ok(o) => {
+                        if o.status.success() {
+                            match String::from_utf8(o.stdout) {
+                                Ok(s) => {
+                                    let user = s.replace(|c| !char::is_alphabetic(c), "");
+
+                                    envs.insert("USER", user);
+                                },
+                                Err(e) => eprintln!("error converting stdout to string: {}", e)
+                            }
+                        }
+                    },
+                    Err(e) => eprintln!("error getting currently logged in user: {}", e)
+                };
+
                 let b = Command::new(program)
                     .args(command_split)
+                    .envs(envs)
                     .output();
                 println!("command output: {:?}", b)
             },
