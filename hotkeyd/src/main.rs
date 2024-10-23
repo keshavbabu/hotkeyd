@@ -1,4 +1,4 @@
-use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, path::Path, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, RwLock}, thread::{sleep, spawn, JoinHandle}, time::Duration};
+use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, path::Path, process::Command, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, RwLock}, thread::{sleep, spawn, JoinHandle}, time::Duration};
 
 use key::Key;
 use notify::FsEventWatcher;
@@ -268,7 +268,24 @@ enum Action {
 impl Action {
     pub fn execute(&self) {
         match self {
-            Action::Cmd { command } => println!("command: {}", command),
+            Action::Cmd { command } => {
+                let mut command_split: Vec<&str> = command.split(" ").collect();
+                let command_split_clone = command_split.clone();
+                let program = match command_split_clone.get(0) {
+                    Some(p) => p,
+                    None => {
+                        eprintln!("invalid command: {}", command);
+                        return
+                    }
+                };
+
+                command_split.drain(0..1);
+
+                let b = Command::new(program)
+                    .args(command_split)
+                    .output();
+                println!("command output: {:?}", b)
+            },
             Action::Macro { r#macro } => println!("macro: {:?}", r#macro),
             Action::MouseModifier { x_mul, y_mul } => println!("mouse-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul),
             Action::ScrollModifier { x_mul, y_mul } => println!("scroll-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul)
