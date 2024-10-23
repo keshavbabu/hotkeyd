@@ -1,4 +1,4 @@
-use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, os::unix::thread, path::Path, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, RwLock}, thread::{sleep, spawn, JoinHandle}, time::Duration};
+use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, path::Path, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, RwLock}, thread::{sleep, spawn, JoinHandle}, time::Duration};
 
 use key::Key;
 use notify::FsEventWatcher;
@@ -266,6 +266,17 @@ enum Action {
 }
 
 impl Action {
+    pub fn execute(&self) {
+        match self {
+            Action::Cmd { command } => println!("command: {}", command),
+            Action::Macro { r#macro } => println!("macro: {:?}", r#macro),
+            Action::MouseModifier { x_mul, y_mul } => println!("mouse-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul),
+            Action::ScrollModifier { x_mul, y_mul } => println!("scroll-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul)
+        }
+    }
+}
+
+impl Action {
     fn new_from_config_map(config_map: &Map<String, Value>) -> Option<Self> {
         let type_val = match config_map.get("type") {
             Some(t) => t,
@@ -425,12 +436,7 @@ impl KeyListener {
         
         // run actions
         for action in &actions {
-            match action {
-                Action::Cmd { command } => println!("command: {}", command),
-                Action::Macro { r#macro } => println!("macro: {:?}", r#macro),
-                Action::MouseModifier { x_mul, y_mul } => println!("mouse-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul),
-                Action::ScrollModifier { x_mul, y_mul } => println!("scroll-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul)
-            }
+            action.execute();
         }
 
         // block original event if there were actions 
