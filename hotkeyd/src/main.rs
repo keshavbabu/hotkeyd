@@ -1,9 +1,9 @@
-use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, path::Path, process::Command, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, RwLock}, thread::{sleep, spawn, JoinHandle}, time::Duration};
+use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, path::Path, process::Command, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, Mutex, RwLock}, thread::{sleep, spawn, JoinHandle}, time::{self, Duration}};
 
 use key::Key;
 use notify::FsEventWatcher;
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, DebouncedEvent, DebouncedEventKind, Debouncer};
-use rdev::{grab, Event, GrabError};
+use rdev::{grab, simulate, Event, EventType, GrabError};
 use toml::{map::Map, Table, Value};
 
 mod key;
@@ -266,6 +266,17 @@ enum Action {
 }
 
 impl Action {
+    fn send(event_type: &EventType) {
+        let delay = time::Duration::from_millis(20);
+        match simulate(event_type) {
+            Ok(()) => (),
+            Err(simulate_error) => {
+                println!("We could not send {:?}: {:?}", event_type, simulate_error);
+            }
+        }
+        sleep(delay);
+    }
+
     pub fn execute(&self) {
         match self {
             Action::Cmd { command } => {
@@ -304,9 +315,40 @@ impl Action {
                     .args(command_split)
                     .envs(envs)
                     .output();
-                println!("command output: {:?}", b)
+                println!("output: {:?}", b)
             },
-            Action::Macro { r#macro } => println!("macro: {:?}", r#macro),
+            Action::Macro { r#macro } => {
+                for m in r#macro {
+                    // key down
+                    println!("{:?}", m);
+                    for key in m {
+                        let r = key.to_rdev();
+                        match r {
+                            (None, Some(b)) => {
+                                Self::send(&EventType::ButtonPress(b));
+                            },
+                            (Some(k), None) => {
+                                Self::send(&EventType::KeyPress(k));
+                            },
+                            _ => eprintln!("bad state: {:?}", r),
+                        }
+                    }
+
+                    // key up
+                    for key in m {
+                        let r = key.to_rdev();
+                        match r {
+                            (None, Some(b)) => {
+                                Self::send(&EventType::ButtonRelease(b));
+                            },
+                            (Some(k), None) => {
+                                Self::send(&EventType::KeyRelease(k));
+                            },
+                            _ => eprintln!("bad state: {:?}", r),
+                        }
+                    }
+                }
+            },
             Action::MouseModifier { x_mul, y_mul } => println!("mouse-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul),
             Action::ScrollModifier { x_mul, y_mul } => println!("scroll-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul)
         }
@@ -442,7 +484,6 @@ impl KeyState {
 #[derive(Debug)]
 struct KeyListener {
     state: KeyState,
-
     config: Config
 }
 
