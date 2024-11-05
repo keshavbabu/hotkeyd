@@ -17,6 +17,7 @@ im thinking the best way to solve this problem is by decouple blocking from the 
 
 we could try and simulate a block by just negating the keys used by the currently running macro. for example, in the example above we wouldn't block the `/` or `shift` keys and instead once we see that we received a key event that matches a bind we can then send `KeyRelease` for both `shift` and `/` before running the macro. something to test is if we send the release event for shift while the user is holding the shift key down will we immediately receive a press event for the shift key from the OS or not?
 
-
 ## some solutions
-given these observations i think a productive change wouold be to complete rethink the way we are storing the keyboard state. modifiers would actually benefit from the current system of just simply storing what keys are currently pressed down. however when dealing with non-modifier keys it might make more sense to hadle them as more of a stream.
+given these observations i think a productive change wouold be to complete rethink the way we are storing the keyboard state. modifiers would actually benefit from the current system of just simply storing what keys are currently pressed down. however when dealing with non-modifier keys it might make more sense to handle them as more of a stream.
+ 
+we also may have to make some alterations to the way that we parse the configuration file because we essentially need to require exactly 1 non-modifier key and at least 1 modifier key per each bind. this is because if we are going to adopt the above method of storing the keyboard state we would not be able to handle 2 non-modifier keys being pressed since they would be handled one at a time.
