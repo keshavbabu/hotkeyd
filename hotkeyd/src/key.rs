@@ -135,7 +135,6 @@ pub enum ModifierKey {
     Function,
     ShiftLeft,
     CapsLock,
-    Unknown(u32)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIndex, PartialOrd, Ord, Hash, ConfigKebabCase)]

@@ -1,5 +1,7 @@
 [workspace]
 
+resolver = "2"
+
 members = [
   "hotkeyd",
   "hotkeyd_derive"
