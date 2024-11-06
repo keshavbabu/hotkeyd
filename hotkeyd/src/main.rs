@@ -1,22 +1,23 @@
-use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, path::Path, process::Command, sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, Mutex, RwLock}, thread::{sleep, spawn, JoinHandle}, time::{self, Duration}};
+use std::{collections::{BTreeSet, HashMap}, env::var, fs::read_to_string, os::macos::raw::stat, path::Path, process::Command, sync::{mpsc::{channel, sync_channel, Receiver, Sender, SyncSender}, Arc, RwLock}, thread::{sleep, spawn, JoinHandle}, time::{self, Duration}};
 
-use key::Key;
+use key::{Key, KeyboardKey, ModifierKey};
 use notify::FsEventWatcher;
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, DebouncedEvent, DebouncedEventKind, Debouncer};
-use rdev::{grab, simulate, Event, EventType, GrabError};
+use rdev::{grab, listen, simulate, Event, EventType, ListenError};
 use toml::{map::Map, Table, Value};
 
 mod key;
+/*
 
 #[derive(Debug)]
 struct ConfigState {
-    binds: HashMap<BTreeSet<Key>, Action>
+    macros: HashMap<Bind, Action>
 }
 
 impl ConfigState {
     fn new() -> Self {
         return ConfigState {
-            binds: HashMap::new()
+            macros: HashMap::new()
         }
     }
 
@@ -117,7 +118,7 @@ struct ConfigFileWatcher {
 }
 
 #[derive(Debug)]
-struct Config {
+struct Config_ {
     state: Arc<RwLock<ConfigState>>,
 
     config_file_watcher: Option<ConfigFileWatcher>
@@ -257,13 +258,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone)]
-enum Action {
-    Cmd { command: String },
-    Macro { r#macro: Vec<BTreeSet<Key>> },
-    ScrollModifier { x_mul: i64, y_mul: i64 },
-    MouseModifier { x_mul: f64, y_mul: f64 }
-}
+
 
 impl Action {
     fn send(event_type: &EventType) {
@@ -490,7 +485,7 @@ struct KeyListener {
 #[derive(Debug)]
 enum KeyListenerError {
     InvalidPermissions,
-    Unknown(GrabError)
+    Unknown(ListenError)
 }
 
 #[derive(Debug)]
@@ -530,18 +525,15 @@ impl KeyListener {
     fn start(&mut self) {
         let (event_sender, event_receiver): (SyncSender<KeyListenerEvent>, Receiver<KeyListenerEvent>) = sync_channel(0);
 
-        let (result_sender, result_receiver): (SyncSender<Option<Event>>, Receiver<Option<Event>>) = sync_channel(0);
         let handle = spawn(move || {
             let sender = event_sender.clone();
-            let res = grab(move |event: Event| -> Option<Event> { 
+            let res = listen(move |event: Event| { 
                 // handle extra shit here
                 let _ = sender.send(KeyListenerEvent::Event(event.clone()));
-
-                result_receiver.recv().expect("failed to receive the response")
             }); 
             let event = match res {
                 Err(e) => KeyListenerEvent::Error(match e {
-                    rdev::GrabError::EventTapError => KeyListenerError::InvalidPermissions,
+                    rdev::ListenError::EventTapError => KeyListenerError::InvalidPermissions,
                     _ => KeyListenerError::Unknown(e)
                 }),
                 Ok(_) => KeyListenerEvent::Exit,
@@ -556,25 +548,20 @@ impl KeyListener {
                         KeyListenerEvent::Event(event) => {
                             match event.event_type {
                                 rdev::EventType::KeyPress(key) => {
-                                    self.state.key_down(Key::new_from_rdev_key(key));
+                                    self.state.key_down(Key::new_from_rdev(key));
                                 },
                                 rdev::EventType::KeyRelease(key) => {
-                                    self.state.key_up(Key::new_from_rdev_key(key));
+                                    self.state.key_up(Key::new_from_rdev(key));
                                 },
                                 rdev::EventType::Wheel { delta_x, delta_y } => {
-                                    self.state.scroll_speed(delta_x, delta_y);
                                 },
                                 rdev::EventType::MouseMove { x, y } => {
-                                    self.state.mouse_position(x, y);
                                 },
                                 rdev::EventType::ButtonPress(button) => {
-                                    self.state.key_down(Key::new_from_rdev_button(button));
                                 },
                                 rdev::EventType::ButtonRelease(button) => {
-                                    self.state.key_up(Key::new_from_rdev_button(button));
                                 },
                             }
-                            let _ = result_sender.send(self.handle_event(event.clone()));
                         },
                         KeyListenerEvent::Error(error) => match error {
                             KeyListenerError::InvalidPermissions => eprintln!("Error: invalid permissions (maybe we don't have access to the Accessibility API)"),
@@ -593,12 +580,247 @@ impl KeyListener {
         let _ = handle.join();
     }
 }
+*/
+
+#[derive(Debug, Clone)]
+enum Action {
+    Cmd { command: String },
+}
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+struct Bind {
+    modifiers: BTreeSet<ModifierKey>,
+    key: KeyboardKey
+}
+
+#[derive(Debug, Clone)]
+struct HIDState {
+    modifiers: BTreeSet<ModifierKey>,
+}
+
+impl HIDState {
+    pub fn new() -> Self {
+        return HIDState{
+            modifiers: BTreeSet::new(),
+        }
+    }
+}
+
+struct EventReceiver {
+    state: HIDState,
+    config_stream_sender: Sender<ConfigManagerMessage>,
+    event_blocking_sender: Sender<Option<Event>>
+}
+
+#[derive(Debug)]
+enum EventReceiverMessage {
+    Event(rdev::Event)
+}
+
+impl EventReceiver {
+    pub fn start(&mut self, event_stream: Receiver<EventReceiverMessage>) {
+        loop {
+            match event_stream.recv() {
+                Ok(e) => {
+                    match e {
+                        EventReceiverMessage::Event(event) => {
+                            match event.event_type {
+                                EventType::KeyPress(rdevkey) => {
+                                    let key = Key::new_from_rdev(rdevkey);
+                                    match key {
+                                        Key::Modifier(modifier_key) => {
+                                            let _ = self.state.modifiers.insert(modifier_key);
+                                            self.event_blocking_sender.send(Some(event));
+                                        },
+                                        Key::Keyboard(keyboard_key) => {
+                                            let _ = self.config_stream_sender.send(ConfigManagerMessage::Event(event, self.state.clone(), keyboard_key));
+                                        }
+                                    }
+                                },
+                                EventType::KeyRelease(rdevkey) => {
+                                    let key = Key::new_from_rdev(rdevkey);
+                                    if let Key::Modifier(modifier_key) = key {
+                                        let _ = self.state.modifiers.remove(&modifier_key);
+                                    }
+
+                                    self.event_blocking_sender.send(Some(event));
+                                }
+                                _ => {
+                                    let _ = self.event_blocking_sender.send(Some(event));
+                                }
+                            }
+                        }
+                    }
+                },
+                Err(err) => eprintln!("[EventReceiver] {:?}", err)
+            }
+        }
+    } 
+
+    pub fn new(
+        config_manager_stream: Sender<ConfigManagerMessage>,
+        event_blocking_sender: Sender<Option<Event>>
+    ) -> Self {
+        EventReceiver {
+            state: HIDState::new(),
+            config_stream_sender: config_manager_stream,
+            event_blocking_sender
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ConfigManagerMessage {
+    Event(Event, HIDState, KeyboardKey),
+    ConfigUpdate(Config)
+}
+
+#[derive(Debug)]
+struct Config {
+    macros: HashMap<Bind, Action>
+}
+
+impl Config {
+    pub fn new() -> Self {
+        let mut macros = HashMap::new();
+        let mut modifiers = BTreeSet::new();
+
+        modifiers.insert(ModifierKey::ShiftLeft);
+
+        let bind = Bind {
+            modifiers,
+            key: KeyboardKey::KeyQ
+        };
+
+        let action = Action::Cmd { command: "bruh".to_string() };
+        macros.insert(bind, action);
+        Config {
+            macros
+        }
+    }
+}
+
+struct ConfigManager {
+    config: Config,
+    action_executor_stream: Sender<ActionExecutorMessage>,
+    event_blocking_sender: Sender<Option<Event>>,
+}
+
+impl ConfigManager {
+
+    fn get_action(&self, state: HIDState, keyboard_key: KeyboardKey) -> Option<Action> {
+        let bind = Bind {
+            modifiers: state.modifiers,
+            key: keyboard_key
+        };
+        self.config.macros.get(&bind).cloned()
+    }
+
+    pub fn start(&self, config_manager_receiver: Receiver<ConfigManagerMessage>) {
+        // fs watcher here
+        
+        loop {
+            match config_manager_receiver.recv() {
+                Ok(msg) => {
+                    match msg {
+                        ConfigManagerMessage::ConfigUpdate(cfg) => println!("[ConfigManager] updating config"),
+                        ConfigManagerMessage::Event(event, state, keyboard_key) => {
+                            let action = self.get_action(state, keyboard_key);
+                            match &action {
+                                Some(a) => {
+                                    let _ = self.action_executor_stream.send(ActionExecutorMessage::ExecuteAction(a.clone()));
+                                },
+                                None => {},
+                            };
+
+                            let response_event = if action.is_some() { None } else { Some(event) };
+
+                            let _ = self.event_blocking_sender.send(response_event);
+                        }
+                    } 
+                },
+                Err(err) => eprintln!("[ConfigManager] {:?}", err)
+            }
+        }
+    }
+
+    pub fn new(
+        action_executor_stream: Sender<ActionExecutorMessage>,
+        event_blocking_sender: Sender<Option<Event>>
+    ) -> Self {
+        return ConfigManager {
+            config: Config::new(),
+            action_executor_stream,
+            event_blocking_sender
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ActionExecutorMessage {
+    ExecuteAction(Action)
+}
+
+struct ActionExecutor {
+}
+
+impl ActionExecutor {
+    pub fn new() -> Self {
+        ActionExecutor { }
+    }
+
+    pub fn start(&self, action_executor_receiver: Receiver<ActionExecutorMessage>) {
+        loop {
+            match action_executor_receiver.recv() {
+                Ok(msg) => println!("[ActionExecutor] executing action: {:?}", msg),
+                Err(err) => eprintln!("[ActionExecutor] {:?}", err)
+            }
+        }
+    }
+}
 
 fn main() {
     println!("start daemon");
 
-    let mut key_listener = KeyListener::new();
-    key_listener.start();
+    println!("starting action executor");
+    let action_executor = ActionExecutor::new();
+    let (action_executor_sender, action_executor_receiver) = channel::<ActionExecutorMessage>();
+    let _action_executor_handle = spawn(move || {
+        action_executor.start(action_executor_receiver);
+    });
+
+    println!("starting config manager");
+    let (event_blocking_sender, event_blocking_receiver) = channel::<Option<Event>>();
+
+    let config_manager = ConfigManager::new(action_executor_sender, event_blocking_sender.clone());
+    let (config_manager_sender, config_manager_receiver) = channel::<ConfigManagerMessage>();
+    let _config_manager_handle = spawn(move || {
+        config_manager.start(config_manager_receiver);
+    });
+
+    println!("starting event receiver");
+    let mut event_receiver = EventReceiver::new(config_manager_sender, event_blocking_sender);
+    let (event_receiver_sender, event_receiver_receiver) = channel::<EventReceiverMessage>();
+    let _event_receiver_handle = spawn(move || {
+        event_receiver.start(event_receiver_receiver);
+    });
+
+    println!("starting event listener");
+    let _ = grab(move |event: Event| -> Option<Event> {
+        let _ = event_receiver_sender.send(EventReceiverMessage::Event(event.clone()));
+
+        let res = event_blocking_receiver.recv();
+        match res {
+            Ok(e) => e,
+            Err(err) => {
+                eprintln!("error receiving {:?}", err);
+
+                Some(event)
+            }
+        }
+    });
+
+    // keep alive
     println!("keeping daemon alive so we don't die too often and get throttled by launchd");
     loop {
         sleep(Duration::new(1, 0));
