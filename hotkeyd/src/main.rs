@@ -37,28 +37,14 @@ impl Action {
                     Err(e) => eprintln!("error getting currently logged in user: {}", e)
                 };
 
-                let commands: Vec<&str> = command.split(" && ").collect();
-                for cmd in commands {
-                    let mut command_split: Vec<&str> = cmd.split(" ").collect();
-                    let command_split_clone = command_split.clone();
-                    let program = match command_split_clone.get(0) {
-                        Some(p) => p,
-                        None => {
-                            eprintln!("invalid command: {}", cmd);
-                            return
-                        }
-                    };
-
-                    command_split.drain(0..1);
-
-                    
-
-                    let b = Command::new(program)
-                        .args(command_split)
-                        .envs(envs.clone())
-                        .output();
-                    println!("output: {:?}", b)
-                } 
+                // im fairly sure its good practice to check $SHELL instead
+                // of blindly using sh but SHELL isnt accessible for some 
+                // reason when using `var("SHELL")`
+                let b = Command::new("sh")
+                    .args(["-c", command])
+                    .envs(envs)
+                    .output();
+                println!("output: {:?}", b);
             },
         }
     }
