@@ -1123,7 +1123,14 @@ impl ActionExecutor {
     pub fn start(&self, action_executor_receiver: Receiver<ActionExecutorMessage>) {
         loop {
             match action_executor_receiver.recv() {
-                Ok(msg) => println!("[ActionExecutor] executing action: {:?}", msg),
+                Ok(msg) => {
+                    match msg {
+                        ActionExecutorMessage::ExecuteAction(action) => {
+                            println!("[ActionExecutor] executing action: {:?}", action);
+                            action.execute();
+                        }
+                    }
+                },
                 Err(err) => eprintln!("[ActionExecutor] {:?}", err)
             }
         }
