@@ -718,8 +718,7 @@ impl ConfigManager {
         self.config.macros.get(&bind).cloned()
     }
 
-    pub fn start(&mut self, config_manager_receiver: Receiver<ConfigManagerMessage>, config_manager_sender: Sender<ConfigManagerMessage>) {
-        // fs watcher here
+    pub fn start_fs_watcher(&mut self, config_manager_sender: Sender<ConfigManagerMessage>) {
         let config_file_path = match var("HOTKEYD_CONFIG") {
             Ok(path) => Some(path),
             Err(err) => {
@@ -784,7 +783,10 @@ impl ConfigManager {
         };
 
         self.fs_watcher_handle = fs_watcher_handle;
+    }
 
+    pub fn start(&mut self, config_manager_receiver: Receiver<ConfigManagerMessage>) {
+        // fs watcher here
         loop {
             match config_manager_receiver.recv() {
                 Ok(msg) => {
@@ -863,7 +865,8 @@ fn main() {
     let (config_manager_sender, config_manager_receiver) = channel::<ConfigManagerMessage>();
     let config_manager_sender_cloned = config_manager_sender.clone();
     let _config_manager_handle = spawn(move || {
-        config_manager.start(config_manager_receiver, config_manager_sender_cloned);
+        config_manager.start_fs_watcher(config_manager_sender_cloned);
+        config_manager.start(config_manager_receiver); 
     });
 
     println!("starting event receiver");
