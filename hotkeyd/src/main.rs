@@ -704,6 +704,8 @@ struct ConfigManager {
     config: Config,
     action_executor_stream: Sender<ActionExecutorMessage>,
     event_blocking_sender: Sender<Option<Event>>,
+
+    fs_watcher_handle: Option<Debouncer<FsEventWatcher>>
 }
 
 impl ConfigManager {
@@ -716,9 +718,73 @@ impl ConfigManager {
         self.config.macros.get(&bind).cloned()
     }
 
-    pub fn start(&self, config_manager_receiver: Receiver<ConfigManagerMessage>) {
+    pub fn start(&mut self, config_manager_receiver: Receiver<ConfigManagerMessage>, config_manager_sender: Sender<ConfigManagerMessage>) {
         // fs watcher here
-        
+        let config_file_path = match var("HOTKEYD_CONFIG") {
+            Ok(path) => Some(path),
+            Err(err) => {
+                eprintln!("error getting config path: {}, maybe HOTKEYD_CONFIG was not set?", err);
+                None
+            }
+        };
+
+        let fs_watcher_handle = match config_file_path.clone() {
+            Some(config_fp) => {
+                // channel to notify to relaod the config
+                let cloned_config_fp = config_fp.clone();
+                let w = new_debouncer(Duration::from_secs(1), move |res: DebounceEventResult| {
+                    let event: DebouncedEvent = match res {
+                        Ok(e) => {
+                            if let Some(ev) = e.last() {
+                                ev.clone()
+                            } else {
+                                return
+                            }
+                        },
+                        Err(err) => {
+                            eprintln!("error watching file: {}", err);
+
+                            return
+                        }
+                    };
+
+                    match event.kind {
+                        DebouncedEventKind::Any => {
+                            let send_result = config_manager_sender.send(ConfigManagerMessage::ConfigUpdate(Config { macros: HashMap::new() }));
+                            match send_result {
+                                Ok(_) => {},
+                                Err(err) => eprintln!("error sending notification to reload config: {}", err)
+                            }
+                        },
+                        _ => {}
+                    }
+                });
+
+                match w {
+                    Ok(mut wat) => {
+                        let res = wat.watcher().watch(Path::new(&config_fp), notify::RecursiveMode::NonRecursive);
+
+                        match res {
+                            Ok(_) => Some(wat),
+                            Err(err) => {
+                                eprintln!("error starting watcher: {}", err);
+
+                                None
+                            }
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!("unable to start config file watcher: {}", error);
+
+                        None
+                    }
+                }
+            },
+            None => None
+        };
+
+        self.fs_watcher_handle = fs_watcher_handle;
+
         loop {
             match config_manager_receiver.recv() {
                 Ok(msg) => {
@@ -751,7 +817,8 @@ impl ConfigManager {
         return ConfigManager {
             config: Config::new(),
             action_executor_stream,
-            event_blocking_sender
+            event_blocking_sender,
+            fs_watcher_handle: None
         }
     }
 }
@@ -792,10 +859,11 @@ fn main() {
     println!("starting config manager");
     let (event_blocking_sender, event_blocking_receiver) = channel::<Option<Event>>();
 
-    let config_manager = ConfigManager::new(action_executor_sender, event_blocking_sender.clone());
+    let mut config_manager = ConfigManager::new(action_executor_sender, event_blocking_sender.clone());
     let (config_manager_sender, config_manager_receiver) = channel::<ConfigManagerMessage>();
+    let config_manager_sender_cloned = config_manager_sender.clone();
     let _config_manager_handle = spawn(move || {
-        config_manager.start(config_manager_receiver);
+        config_manager.start(config_manager_receiver, config_manager_sender_cloned);
     });
 
     println!("starting event receiver");
