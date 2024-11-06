@@ -128,7 +128,6 @@ impl EventReceiver {
                                         Key::Modifier(modifier_key) => {
                                             let _ = self.state.modifiers.insert(modifier_key);
                                             let _ = self.event_blocking_sender.send(Some(event));
-                                            println!("modifier: {:?}", modifier_key);
                                         },
                                         Key::Keyboard(keyboard_key) => {
                                             let _ = self.config_stream_sender.send(ConfigManagerMessage::Event(event, self.state.clone(), keyboard_key));
@@ -465,7 +464,6 @@ impl ActionExecutor {
                 Ok(msg) => {
                     match msg {
                         ActionExecutorMessage::ExecuteAction(action) => {
-                            println!("[ActionExecutor] executing action: {:?}", action);
                             action.execute();
                         }
                     }
