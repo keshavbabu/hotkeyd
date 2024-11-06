@@ -21,11 +21,10 @@ pub fn config_kebab_case(input: TokenStream) -> TokenStream {
         
         match &variant.fields {
             Fields::Unit => quote! {
-                #kebab_case_name => Some(#name::#variant)
+                #kebab_case_name => Some(#name::#variant),
             },
             Fields::Unnamed(_) => quote! {
                 #kebab_case_name => Some(#name::#variant_name(0)),
-                _ => None
             },
             _ => panic!("Only unit and unnamed variants are supported in EnumIndex"),
         }
@@ -35,7 +34,8 @@ pub fn config_kebab_case(input: TokenStream) -> TokenStream {
         impl #name {
             pub fn from_config_kebab(config_name: &str) -> Option<#name> {
                 match config_name {
-                    #(#variant_arms),*
+                    #(#variant_arms)*
+                    _ => None
                 }
             }
         }
