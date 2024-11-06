@@ -589,6 +589,85 @@ enum Action {
 }
 
 impl Action {
+    pub fn execute(&self) {
+        match self {
+            Action::Cmd { command } => {
+                let mut command_split: Vec<&str> = command.split(" ").collect();
+                let command_split_clone = command_split.clone();
+                let program = match command_split_clone.get(0) {
+                    Some(p) => p,
+                    None => {
+                        eprintln!("invalid command: {}", command);
+                        return
+                    }
+                };
+
+                command_split.drain(0..1);
+
+                let mut envs = HashMap::new();
+
+                // we want to set the USER env var to the currently logged in user
+                match Command::new("/usr/bin/stat").args(["-f", "\"%Su\"", "/dev/console"]).output() {
+                    Ok(o) => {
+                        if o.status.success() {
+                            match String::from_utf8(o.stdout) {
+                                Ok(s) => {
+                                    let user = s.replace(|c| !char::is_alphabetic(c), "");
+
+                                    envs.insert("USER", user);
+                                },
+                                Err(e) => eprintln!("error converting stdout to string: {}", e)
+                            }
+                        }
+                    },
+                    Err(e) => eprintln!("error getting currently logged in user: {}", e)
+                };
+
+                let b = Command::new(program)
+                    .args(command_split)
+                    .envs(envs)
+                    .output();
+                println!("output: {:?}", b)
+            },
+            /*
+            Action::Macro { r#macro } => {
+                for m in r#macro {
+                    // key down
+                    println!("{:?}", m);
+                    for key in m {
+                        let r = key.to_rdev();
+                        match r {
+                            (None, Some(b)) => {
+                                Self::send(&EventType::ButtonPress(b));
+                            },
+                            (Some(k), None) => {
+                                Self::send(&EventType::KeyPress(k));
+                            },
+                            _ => eprintln!("bad state: {:?}", r),
+                        }
+                    }
+
+                    // key up
+                    for key in m {
+                        let r = key.to_rdev();
+                        match r {
+                            (None, Some(b)) => {
+                                Self::send(&EventType::ButtonRelease(b));
+                            },
+                            (Some(k), None) => {
+                                Self::send(&EventType::KeyRelease(k));
+                            },
+                            _ => eprintln!("bad state: {:?}", r),
+                        }
+                    }
+                }
+            },
+            Action::MouseModifier { x_mul, y_mul } => println!("mouse-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul),
+            Action::ScrollModifier { x_mul, y_mul } => println!("scroll-modifier: x_mul: {}, y_mul: {}", x_mul, y_mul)
+    */
+        }
+    }
+
     fn new_from_config_map(config_map: &Map<String, Value>) -> Option<Self> {
         let type_val = match config_map.get("type") {
             Some(t) => t,
@@ -977,7 +1056,9 @@ impl ConfigManager {
             match config_manager_receiver.recv() {
                 Ok(msg) => {
                     match msg {
-                        ConfigManagerMessage::ConfigUpdate(cfg) => println!("[ConfigManager] updating config"),
+                        ConfigManagerMessage::ConfigUpdate(cfg) => {
+                            self.config = cfg;
+                        },
                         ConfigManagerMessage::Event(event, state, keyboard_key) => {
                             let action = self.get_action(state, keyboard_key);
                             match &action {
