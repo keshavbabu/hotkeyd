@@ -18,18 +18,6 @@ impl Action {
     pub fn execute(&self) {
         match self {
             Action::Cmd { command } => {
-                let mut command_split: Vec<&str> = command.split(" ").collect();
-                let command_split_clone = command_split.clone();
-                let program = match command_split_clone.get(0) {
-                    Some(p) => p,
-                    None => {
-                        eprintln!("invalid command: {}", command);
-                        return
-                    }
-                };
-
-                command_split.drain(0..1);
-
                 let mut envs = HashMap::new();
 
                 // we want to set the USER env var to the currently logged in user
@@ -49,11 +37,28 @@ impl Action {
                     Err(e) => eprintln!("error getting currently logged in user: {}", e)
                 };
 
-                let b = Command::new(program)
-                    .args(command_split)
-                    .envs(envs)
-                    .output();
-                println!("output: {:?}", b)
+                let commands: Vec<&str> = command.split(" && ").collect();
+                for cmd in commands {
+                    let mut command_split: Vec<&str> = cmd.split(" ").collect();
+                    let command_split_clone = command_split.clone();
+                    let program = match command_split_clone.get(0) {
+                        Some(p) => p,
+                        None => {
+                            eprintln!("invalid command: {}", cmd);
+                            return
+                        }
+                    };
+
+                    command_split.drain(0..1);
+
+                    
+
+                    let b = Command::new(program)
+                        .args(command_split)
+                        .envs(envs.clone())
+                        .output();
+                    println!("output: {:?}", b)
+                } 
             },
         }
     }
@@ -137,6 +142,7 @@ impl EventReceiver {
                                         Key::Modifier(modifier_key) => {
                                             let _ = self.state.modifiers.insert(modifier_key);
                                             let _ = self.event_blocking_sender.send(Some(event));
+                                            println!("modifier: {:?}", modifier_key);
                                         },
                                         Key::Keyboard(keyboard_key) => {
                                             let _ = self.config_stream_sender.send(ConfigManagerMessage::Event(event, self.state.clone(), keyboard_key));
