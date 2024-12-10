@@ -121,6 +121,7 @@ impl EventReceiver {
                 Ok(e) => {
                     match e {
                         EventReceiverMessage::Event(event) => {
+                            //println!("[event-receiver] received: {:?}", event);
                             match event.event_type {
                                 EventType::KeyPress(rdevkey) => {
                                     let key = Key::new_from_rdev(rdevkey);
@@ -395,10 +396,12 @@ impl ConfigManager {
                 Ok(msg) => {
                     match msg {
                         ConfigManagerMessage::ConfigUpdate(cfg) => {
+                            println!("[config-manager] reloading config: {:?}", cfg);
                             self.config = cfg;
                         },
                         ConfigManagerMessage::Event(event, state, keyboard_key) => {
                             let action = self.get_action(state, keyboard_key);
+                            println!("[config-manager] action: {:?}", action);
                             match &action {
                                 Some(a) => {
                                     let _ = self.action_executor_stream.send(ActionExecutorMessage::ExecuteAction(a.clone()));
@@ -461,9 +464,10 @@ impl ActionExecutor {
     pub fn start(&self, action_executor_receiver: Receiver<ActionExecutorMessage>) {
         loop {
             match action_executor_receiver.recv() {
-                Ok(msg) => {
+                Ok(msg) => { 
                     match msg {
                         ActionExecutorMessage::ExecuteAction(action) => {
+                            println!("[action-executor] received action: {:?}", action);
                             action.execute();
                         }
                     }
@@ -504,17 +508,22 @@ fn main() {
 
     println!("starting event listener");
     let _ = grab(move |event: Event| -> Option<Event> {
-        let _ = event_receiver_sender.send(EventReceiverMessage::Event(event.clone()));
+        println!("[event-listener] received: {:?}", event);
+        let _ = event_receiver_sender.send(EventReceiverMessage::Event(event.clone())); 
 
-        let res = event_blocking_receiver.recv();
-        match res {
+        let res = event_blocking_receiver.recv(); 
+        let e = match res {
             Ok(e) => e,
             Err(err) => {
                 eprintln!("error receiving {:?}", err);
 
                 Some(event)
             }
-        }
+        };
+
+        println!("[event-listener] sending: {:?}", e);
+
+        return e;
     });
 
     // keep alive
