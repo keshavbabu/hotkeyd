@@ -4,7 +4,7 @@ use rdev::Key as RDevKey;
 #[derive(Debug)]
 pub enum Key {
     Modifier(ModifierKey),
-    Keyboard(KeyboardKey)
+    Keyboard(KeyboardKey),
 }
 
 impl Key {
@@ -125,15 +125,15 @@ impl Key {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIndex, PartialOrd, Ord, Hash, ConfigKebabCase)]
 pub enum ModifierKey {
+    ShiftLeft,
     ShiftRight,
-    AltGr,
     MetaRight,
     MetaLeft,
-    Alt,
     ControlLeft,
     ControlRight,
+    AltGr,
+    Alt,
     Function,
-    ShiftLeft,
     CapsLock,
 }
 

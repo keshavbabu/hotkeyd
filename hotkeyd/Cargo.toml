@@ -4,10 +4,12 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-linked_hash_set = "0.1.4"
 rdev = { version = "0.5.3", features = ["unstable_grab", "serialize"] }
 serde = "1.0.210"
 toml = "0.8.19"
 hotkeyd_derive = { path = "../hotkeyd_derive" }
-notify = "6.1.1"
-notify-debouncer-mini = "0.4.1"
+notify = "8.0.0"
+notify-debouncer-mini = "0.6.0"
+lazy_static = "1.5.0"
+tokio = { version = "1.44.1", features = ["full"] }
+clap = { version = "4.5.34", features = ["derive", "env", "string", "unicode"] }
